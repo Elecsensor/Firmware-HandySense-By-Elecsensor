@@ -198,7 +198,7 @@ unsigned long previousTime_brightness = 0;
 
 // ประกาศตัวแปรกำหนดการนับเวลาเริ่มต้น
 unsigned long previousTime_Update_data = 0;
-const unsigned long eventInterval_publishData = 2 * 60 * 1000;  // เช่น 2*60*1000 ส่งทุก 2 นาที
+const unsigned long eventInterval_publishData = 1 * 10 * 1000;  // เช่น 2*60*1000 ส่งทุก 2 นาที
 
 // ประกาศตัวแปรกำหนดการนับเวลา เชือม wifi หากเชื่อมไม่ได้นานเกิน 1 ชม.
 unsigned long previousTime_wifi = 0;
@@ -225,6 +225,7 @@ int lux_error_count = 0;
 float soil = 0;
 int soil_error = 0;
 int soil_error_count = 0;
+int soil_disconnect = 0;
 
 // Array สำหรับทำ Movie Arg. ของค่าเซ็นเซอร์ทุก ๆ ค่า
 float ma_temp[5];
@@ -304,7 +305,7 @@ int check_sendData_SoilMinMax = 0;
 int check_sendData_tempMinMax = 0;
 
 int tpye_lux = 0;
-int init_checkTemp, init_checkSoil;
+int init_checkTemp[4], init_checkSoil[4];
 
 /* ----------------------- OTA Function => One on One --------------------------- */
 void OTA_update() {
@@ -378,12 +379,10 @@ void callback(String topic, byte* payload, unsigned int length) {
   /* ------- topic Soil min max ------- */
   else if (topic.substring(0, 17) == "@private/max_temp" || topic.substring(0, 17) == "@private/min_temp") {
     TempMaxMin_setting(topic, message, length);
-    init_checkTemp = 0;
   }
   /* ------- topic Temp min max ------- */
   else if (topic.substring(0, 17) == "@private/max_soil" || topic.substring(0, 17) == "@private/min_soil") {
     SoilMaxMin_setting(topic, message, length);
-    init_checkSoil = 0;
   }
 }
 
@@ -404,6 +403,20 @@ void sent_dataTimer(String topic, String message) {
 void UpdateData_To_Server() {
   String DatatoWeb;
   char msgtoWeb[200];
+
+  if (soil_error == 1) {
+    soil = 0.00;
+  }
+  if (temp_error == 1) {
+    temp = 0.00;
+  }
+  if (hum_error == 1) {
+    humidity = 0.00;
+  }
+  if (lux_error == 1) {
+    lux_44009 = 0.00;
+  }
+  
   DatatoWeb = "{\"data\": {\"temperature\":" + String(temp) +
               ",\"humidity\":" + String(humidity) + ",\"lux\":" +
               String(lux_44009) + ",\"soil\":" + String(soil)  + "}}";
@@ -540,21 +553,25 @@ void ControlRelay_Bytimmer() {
       secondNow = timeinfo.tm_sec;
 
       curentTimer = (hourNow * 60) + minuteNow;
+      DEBUG_PRINT("weekdayNow : "); DEBUG_PRINTLN(weekdayNow);
       dayofweek = weekdayNow - 1;
-      DEBUG_PRINT("USE RTC wifi");
+      DEBUG_PRINT("USE RTC wifi : "); DEBUG_PRINT(dayofweek);
       DEBUG_PRINTLN();
     } else {
       _now = rtc.now();
       curentTimer = (_now.hour() * 60) + _now.minute();
+      DEBUG_PRINT("weekdayNow : "); DEBUG_PRINTLN(_now.dayOfTheWeek());
       dayofweek = _now.dayOfTheWeek() - 1;
-      DEBUG_PRINT("USE RTC not wifi");
+      DEBUG_PRINT("USE RTC not wifi"); DEBUG_PRINT(dayofweek);
       DEBUG_PRINTLN();
     }
   } else {
     _now = rtc.now();
     curentTimer = (_now.hour() * 60) + _now.minute();
+    DEBUG_PRINT("weekdayNow : "); DEBUG_PRINTLN(_now.dayOfTheWeek());
+    delay(50);
     dayofweek = _now.dayOfTheWeek() - 1;
-    DEBUG_PRINT("USE RTC Local");
+    DEBUG_PRINT("USE RTC Local : "); DEBUG_PRINT(dayofweek);
     DEBUG_PRINTLN();
   }
   //DEBUG_PRINT("curentTimer : "); DEBUG_PRINTLN(curentTimer);
@@ -647,6 +664,7 @@ void SoilMaxMin_setting(String topic, String message, unsigned int length) {
     DEBUG_PRINT("Min_Soil : ");
     DEBUG_PRINTLN(Min_Soil[Relay_SoilMaxMin]);
   }
+  init_checkSoil[Relay_SoilMaxMin] = 0;
 }
 
 /* ----------------------- TempMaxMin_setting --------------------------- */
@@ -654,6 +672,8 @@ void TempMaxMin_setting(String topic, String message, unsigned int length) {
   String temp_message = message;
   String temp_topic = topic;
   int Relay_TempMaxMin = topic.substring(topic.length() - 1).toInt();
+  //DEBUG_PRINT("Relay_TempMaxMin : "); DEBUG_PRINTLN(Relay_TempMaxMin);
+
   if (temp_topic.substring(9, 12) == "max") {
     Max_Temp[Relay_TempMaxMin] = temp_message.toInt();
     EEPROM.write(Relay_TempMaxMin + 2008, Max_Temp[Relay_TempMaxMin]);
@@ -669,6 +689,7 @@ void TempMaxMin_setting(String topic, String message, unsigned int length) {
     DEBUG_PRINT("Min_Temp : ");
     DEBUG_PRINTLN(Min_Temp[Relay_TempMaxMin]);
   }
+  init_checkTemp[Relay_TempMaxMin] = 0;
 }
 
 /* ----------------------- soilMinMax_ControlRelay --------------------------- */
@@ -676,30 +697,37 @@ void ControlRelay_BysoilMinMax() {
   Get_soil();
   for (int k = 0; k < 4; k++) {
     if (Min_Soil[k] != 0 && Max_Soil[k] != 0) {
-      if (soil < Min_Soil[k]) {
-        if (statusSoil[k] == 0 || init_checkSoil == 0) {
-          Open_relay(k);
-          statusSoil[k] = 1;
-          RelayStatus[k] = 1;
-          check_sendData_status = 1;
-          digitalWrite(LEDY, HIGH);
-          //check_sendData_toWeb = 1;
-          DEBUG_PRINTLN("soil On");
-          init_checkSoil = 1;
-        }
-      } else if (soil > Max_Soil[k]) {
-        if (statusSoil[k] == 1 || init_checkSoil == 0) {
-          Close_relay(k);
-          statusSoil[k] = 0;
-          RelayStatus[k] = 0;
-          check_sendData_status = 1;
-          digitalWrite(LEDY, HIGH);
-          //check_sendData_toWeb = 1;
-          DEBUG_PRINTLN("soil Off");
-          init_checkSoil = 1;
+      if (Min_Soil[k] < Max_Soil[k]) {
+        if (soil < Min_Soil[k]) {
+          if (statusSoil[k] == 0 || init_checkSoil[k] == 0) {
+            Open_relay(k);
+            statusSoil[k] = 1;
+            RelayStatus[k] = 1;
+            check_sendData_status = 1;
+            digitalWrite(LEDY, HIGH);
+            //check_sendData_toWeb = 1;
+            DEBUG_PRINTLN("soil On");
+            init_checkSoil[k] = 1;
+          }
+        } else if (soil > Max_Soil[k]) {
+          if (statusSoil[k] == 1 || init_checkSoil[k] == 0) {
+            Close_relay(k);
+            statusSoil[k] = 0;
+            RelayStatus[k] = 0;
+            check_sendData_status = 1;
+            digitalWrite(LEDY, HIGH);
+            //check_sendData_toWeb = 1;
+            DEBUG_PRINTLN("soil Off");
+            init_checkSoil[k] = 1;
+          }
         }
       }
+      else {
+        DEBUG_PRINTLN("Error (Max_Soil < Min_Soil) ? ");
+      }
     }
+    DEBUG_PRINT("init_checkSoil : ");
+    DEBUG_PRINTLN(init_checkSoil[k]);
   }
 }
 
@@ -708,30 +736,37 @@ void ControlRelay_BytempMinMax() {
   Get_sht31();
   for (int g = 0; g < 4; g++) {
     if (Min_Temp[g] != 0 && Max_Temp[g] != 0) {
-      if (temp < Min_Temp[g]) {
-        if (statusTemp[g] == 1 || init_checkTemp == 0) {
-          Close_relay(g);
-          statusTemp[g] = 0;
-          RelayStatus[g] = 0;
-          check_sendData_status = 1;
-          digitalWrite(LEDY, HIGH);
-          //check_sendData_toWeb = 1;
-          DEBUG_PRINTLN("temp Off");
-          init_checkTemp = 1;
-        }
-      } else if (temp > Max_Temp[g] || init_checkTemp == 0) {
-        if (statusTemp[g] == 0) {
-          Open_relay(g);
-          statusTemp[g] = 1;
-          RelayStatus[g] = 1;
-          check_sendData_status = 1;
-          digitalWrite(LEDY, HIGH);
-          //check_sendData_toWeb = 1;
-          DEBUG_PRINTLN("temp On");
-          init_checkTemp = 1;
+      if (Max_Temp[g] > Min_Temp[g]) {
+        if (temp < Min_Temp[g]) {
+          if (statusTemp[g] == 1 || init_checkTemp[g] == 0) {
+            Close_relay(g);
+            DEBUG_PRINT("relay : "); DEBUG_PRINTLN(g);
+            DEBUG_PRINTLN("temp Off");
+            statusTemp[g] = 0;
+            RelayStatus[g] = 0;
+            check_sendData_status = 1;
+            digitalWrite(LEDY, HIGH);
+            init_checkTemp[g] = 1;
+          }
+        } else if (temp > Max_Temp[g]) {
+          if (statusTemp[g] == 0 || init_checkTemp[g] == 0) {
+            Open_relay(g);
+            DEBUG_PRINT("relay : "); DEBUG_PRINTLN(g);
+            DEBUG_PRINTLN("temp On");
+            statusTemp[g] = 1;
+            RelayStatus[g] = 1;
+            check_sendData_status = 1;
+            digitalWrite(LEDY, HIGH);
+            init_checkTemp[g] = 1;
+          }
         }
       }
+      else {
+        DEBUG_PRINTLN("Error (Max_Temp < Min_Temp) ? ");
+      }
     }
+    DEBUG_PRINT("init_checkTemp : ");
+    DEBUG_PRINTLN(init_checkTemp[g]);
   }
 }
 
@@ -868,15 +903,16 @@ void Get_max44009() {
 }
 
 /* ----------------------- Calculator sensor Soil  --------------------------- */
+int config_error = 8;
+int soil_disconnect_error = 20;
 void Get_soil() {
   float buffer_soil = 0;
   sensorValue_soil_moisture = analogRead(Soil_moisture_sensorPin);
-  //buffer_soil = map(sensorValue_soil_moisture, 2400, 860, 0, 100);
+  //voltageValue_soil_moisture = (sensorValue_soil_moisture * 3.3) / (4095.00);
+  //buffer_soil = ((-58.82) * voltageValue_soil_moisture) + 113.52;
+  buffer_soil = map(sensorValue_soil_moisture, 2400, 860, 0, 100);
 
-  voltageValue_soil_moisture = (sensorValue_soil_moisture * 3.3) / (4095.00);
-  buffer_soil = ((-58.82) * voltageValue_soil_moisture) + 113.52;
-
-  if (buffer_soil < 0 || buffer_soil > 4095 || isnan(buffer_soil)) {  // range 0 to 100 %
+  if (buffer_soil < 0 || buffer_soil > 100 || isnan(buffer_soil)) {  // range 0 to 100 %
     if (soil_error_count >= 10) {
       soil_error = 1;
       digitalWrite(status_soil_error, HIGH);
@@ -893,15 +929,37 @@ void Get_soil() {
     ma_soil[2] = ma_soil[1];
     ma_soil[1] = ma_soil[0];
     ma_soil[0] = buffer_soil;
-    soil = (ma_soil[0] + ma_soil[1] + ma_soil[2] + ma_soil[3] + ma_soil[4]) / 5;
-    if (soil <= 0) {
-      soil = 0;
-    } else if (soil >= 100) {
-      soil = 100;
+
+    if ((abs(ma_soil[0] - ma_soil[1]) >= config_error)) {
+      DEBUG_PRINT("abs01     : ");
+      DEBUG_PRINTLN(abs(buffer_soil - ma_soil[0]));
+      soil_disconnect++;
     }
-    soil_error = 0;
+    if ((abs(ma_soil[2] - ma_soil[3]) >= config_error)) {
+      DEBUG_PRINT("abs02     : ");
+      DEBUG_PRINTLN(abs(ma_soil[0] - ma_soil[1]));
+      soil_disconnect++;
+    }
+    DEBUG_PRINT("soil_disconnect : ");
+    DEBUG_PRINTLN(soil_disconnect);
+
+    soil = (ma_soil[0] + ma_soil[1] + ma_soil[2] + ma_soil[3] + ma_soil[4]) / 5;
     soil_error_count = 0;
-    digitalWrite(status_soil_error, LOW);
+
+    if (soil_disconnect == 0) {
+      digitalWrite(status_soil_error, LOW);
+      soil_error = 0;
+    } else {
+      if (soil_disconnect >= soil_disconnect_error) {
+        soil_disconnect = soil_disconnect_error;
+        soil_error = 1;
+        digitalWrite(status_soil_error, HIGH);
+      }
+      soil_disconnect--;
+      if (soil_disconnect < 0) {
+        soil_disconnect = 0;
+      }
+    }
   }
 }
 
@@ -1194,8 +1252,13 @@ void loop() {
   unsigned long currentTime = millis();
   if (currentTime - previousTime_Temp_soil >= eventInterval) {
     ControlRelay_Bytimmer();
-    ControlRelay_BysoilMinMax();
-    ControlRelay_BytempMinMax();
+
+    if (soil_error == 0) {
+      ControlRelay_BysoilMinMax();
+    }
+    if (temp_error == 0) {
+      ControlRelay_BytempMinMax();
+    }
 
     DEBUG_PRINTLN("");
     DEBUG_PRINT("Temp : ");
@@ -1217,7 +1280,30 @@ void loop() {
     previousTime_Temp_soil = currentTime;
   }
   if (currentTime - previousTime_brightness >= eventInterval_brightness) {
-    Get_max44009();
+    Get_max44009();  
+    if (temp_error == 1 || lux_error == 1) {
+      byte error, address;
+      for (address = 1; address < 127; address++ ) {
+        Wire.beginTransmission(address);
+        error = Wire.endTransmission();
+        if (error == 0) {
+          DEBUG_PRINT("I2C device found at address 0x");
+          if (address < 16) {
+            DEBUG_PRINT("0");
+          }
+          Serial.println(address, DEC);
+          if (address == 68) {
+            temp_error = 0;
+          }
+          if (address == 74) {
+            lux_error = 0;
+          }
+        }
+      }
+    }    
+    if (soil_error == 1) {
+      Get_soil();
+    }
     previousTime_brightness = currentTime;
   }
   unsigned long currentTime_Update_data = millis();
@@ -1236,7 +1322,7 @@ void TaskWifiStatus(void* pvParameters) {
 
     connectWifiStatus = cannotConnect;
     WiFi.begin(ssid.c_str(), password.c_str());
-    delay(1000);
+    delay(4000);
 
     while (WiFi.status() != WL_CONNECTED) {
       WiFi.begin(ssid.c_str(), password.c_str());
@@ -1269,7 +1355,9 @@ void TaskWifiStatus(void* pvParameters) {
       minuteNow = timeinfo.tm_min;
       secondNow = timeinfo.tm_sec;
       rtc.adjust(DateTime(yearNow, monthNow, dayNow, hourNow, minuteNow, secondNow));
-      OTA_update();
+      delay(2000);
+
+      //OTA_update();
 
       check_sendData_status = 1;
       sendStatus_RelaytoWeb();
@@ -1279,7 +1367,7 @@ void TaskWifiStatus(void* pvParameters) {
       sendStatus_RelaytoWeb();
       send_soilMinMax();
       send_tempMinMax();
-      delay(1000);
+      delay(500);
 
       if (!client.connected()) {
         break;
