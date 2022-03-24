@@ -198,7 +198,7 @@ unsigned long previousTime_brightness = 0;
 
 // ประกาศตัวแปรกำหนดการนับเวลาเริ่มต้น
 unsigned long previousTime_Update_data = 0;
-const unsigned long eventInterval_publishData = 1 * 10 * 1000;  // เช่น 2*60*1000 ส่งทุก 2 นาที
+const unsigned long eventInterval_publishData = 2 * 60 * 1000;  // เช่น 2*60*1000 ส่งทุก 2 นาที
 
 // ประกาศตัวแปรกำหนดการนับเวลา เชือม wifi หากเชื่อมไม่ได้นานเกิน 1 ชม.
 unsigned long previousTime_wifi = 0;
